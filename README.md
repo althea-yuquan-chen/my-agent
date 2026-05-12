@@ -157,17 +157,3 @@ crontab -e
 
 Monthly cost: roughly **$0.06**. 
 
----
-
-## What to build next (for your manager)
-
-Once this works for yourself, the next additions are:
-
-1. **Customer follow-up tracker** — a small SQLite table tracking last-contact per person,
-   so the agent can say "You haven't replied to Alice in 8 days."
-2. **Draft reply suggestions** — for emails flagged as needing action, have Claude
-   pre-write a draft and save it to Gmail Drafts via the Gmail API.
-3. **Google Chat integration** — make the agent a 2-way Chat bot so your manager
-   can reply and the agent responds.
-
-Each is a 1-2 day addition on top of this foundation.
