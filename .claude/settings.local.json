@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/yuquanchen/.claude/skills/gstack/**)",
+      "Bash(~/.bun/bin/bun --version)",
+      "Bash(./setup)",
+      "Bash(PATH=__TRACKED_VAR__/.bun/bin:__TRACKED_VAR__ ./setup)"
+    ]
+  }
+}

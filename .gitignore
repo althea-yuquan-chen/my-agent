@@ -1,0 +1,45 @@
+# ── Python ─────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── Virtual environment ─────────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env_backup
+
+# ── SECRETS — never commit these ───────────────────────────────────────────────
+.env
+credentials.json
+token*.json          # covers token_personal.json, token_work.json, etc.
+*.pem
+*.key
+
+# ── Database (contains your personal email/contact memory) ─────────────────────
+secretary_memory.db
+secretary_memory.db-shm
+secretary_memory.db-wal
+
+# ── Briefing outputs (personal content) ────────────────────────────────────────
+briefings/
+
+# ── macOS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── IDEs ────────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Logs ────────────────────────────────────────────────────────────────────────
+*.log
