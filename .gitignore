@@ -18,7 +18,9 @@ env/
 # ── SECRETS — never commit these ───────────────────────────────────────────────
 .env
 credentials.json
-token*.json          # covers token_personal.json, token_work.json, etc.
+token.json       
+token_personal.json
+token_work.json
 *.pem
 *.key
 

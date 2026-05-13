@@ -80,7 +80,7 @@ def log_event(event_type: str, summary: str,
             "VALUES (?, ?, ?, ?, ?)",
             (event_type, source_id, summary,
              json.dumps(metadata or {}),
-             datetime.datetime.utcnow().isoformat())
+             datetime.datetime.now(datetime.timezone.utc).isoformat())
         )
 
 
@@ -99,7 +99,7 @@ def upsert_contact(email: str, name: str = None,
                    direction: str = None,    # 'from_them' | 'to_them'
                    open_thread: str = None):
     """Create or update a contact record when we see an email."""
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     with get_db() as conn:
         existing = conn.execute(
             "SELECT * FROM contacts WHERE email=?", (email,)
@@ -134,7 +134,7 @@ def upsert_contact(email: str, name: str = None,
 
 def get_overdue_contacts(days: int = 5) -> list[dict]:
     """People who emailed us but we haven't replied to in `days` days."""
-    cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=days)).isoformat()
+    cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)).isoformat()
     with get_db() as conn:
         rows = conn.execute(
             """
@@ -154,7 +154,7 @@ def get_overdue_contacts(days: int = 5) -> list[dict]:
 
 def set_contact_priority(email: str, priority: str, notes: str = None):
     """Manually mark a contact as high/normal/low priority."""
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     with get_db() as conn:
         conn.execute(
             "UPDATE contacts SET priority=?, notes=COALESCE(?, notes), updated_at=? WHERE email=?",
@@ -196,7 +196,7 @@ def get_preference(key: str):
 
 
 def set_preference(key: str, value, description: str = None):
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     with get_db() as conn:
         conn.execute(
             "INSERT INTO preferences (key, value, description, updated_at) VALUES (?, ?, ?, ?) "
@@ -216,7 +216,7 @@ def init_default_preferences():
 
 def save_briefing(content: str, email_count: int, event_count: int):
     today = datetime.date.today().isoformat()
-    now   = datetime.datetime.utcnow().isoformat()
+    now   = datetime.datetime.now(datetime.timezone.utc).isoformat()
     with get_db() as conn:
         conn.execute(
             "INSERT INTO briefing_log (date, content, email_count, event_count, created_at) "

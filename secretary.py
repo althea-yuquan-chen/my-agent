@@ -108,7 +108,7 @@ def get_google_creds(creds_file: Path, token_file: Path) -> Credentials:
 def fetch_gmail(box: dict) -> list[dict]:
     creds   = get_google_creds(box["creds_file"], box["token_file"])
     service = build("gmail", "v1", credentials=creds)
-    cutoff  = datetime.datetime.utcnow() - datetime.timedelta(hours=EMAIL_LOOKBACK_HOURS)
+    cutoff  = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=EMAIL_LOOKBACK_HOURS)
     query   = f"after:{int(cutoff.timestamp())} -category:promotions -category:social"
 
     results  = service.users().messages().list(
@@ -143,12 +143,13 @@ def fetch_gmail(box: dict) -> list[dict]:
 
         contact_info = mem.get_contact(email_addr)
         emails.append({
-            "mailbox":  box["label"],
-            "from":     sender,
-            "email":    email_addr,
-            "subject":  subject,
-            "snippet":  snippet,
-            "priority": contact_info["priority"] if contact_info else "normal",
+            "mailbox":    box["label"],
+            "from":       sender,
+            "email":      email_addr,
+            "subject":    subject,
+            "snippet":    snippet,
+            "priority":   contact_info["priority"] if contact_info else "normal",
+            "message_id": msg["id"], 
         })
 
     return emails
@@ -164,7 +165,7 @@ def fetch_imap(box: dict) -> list[dict]:
         mail.login(box["username"], box["password"])
         mail.select("INBOX")
 
-        cutoff   = datetime.datetime.utcnow() - datetime.timedelta(hours=EMAIL_LOOKBACK_HOURS)
+        cutoff   = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=EMAIL_LOOKBACK_HOURS)
         date_str = cutoff.strftime("%d-%b-%Y")
         _, data  = mail.search(None, f'(SINCE "{date_str}")')
         msg_ids  = data[0].split()[-MAX_EMAILS_PER_BOX:]
@@ -219,11 +220,159 @@ def fetch_imap(box: dict) -> list[dict]:
     return emails
 
 
+# ── Agentic email triage ────────────────────────────────────────────────────────
+
+TRIAGE_TOOLS = [
+    {
+        "name": "fetch_email_thread",
+        "description": (
+            "Fetch the full body and recent thread history for a specific email. "
+            "Call this when an email subject or snippet suggests it needs deeper context "
+            "before the briefing — e.g. contract deadlines, urgent decisions, "
+            "escalations, or emails from high-priority contacts."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "email_index": {
+                    "type": "integer",
+                    "description": "The index of the email in the provided list (0-based)."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "One sentence explaining why this email needs deeper context."
+                }
+            },
+            "required": ["email_index", "reason"]
+        }
+    }
+]
+
+
+def fetch_full_body_gmail(box: dict, message_id: str) -> str:
+    """Fetch the full plain-text body of a Gmail message."""
+    try:
+        creds   = get_google_creds(box["creds_file"], box["token_file"])
+        service = build("gmail", "v1", credentials=creds)
+        full    = service.users().messages().get(
+            userId="me", id=message_id, format="full"
+        ).execute()
+
+        parts = full.get("payload", {}).get("parts", [])
+        for part in parts:
+            if part.get("mimeType") == "text/plain":
+                import base64
+                data = part["body"].get("data", "")
+                return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")[:1500]
+
+        # Fallback: snippet
+        return full.get("snippet", "")[:500]
+    except Exception as e:
+        return f"(Could not fetch full body: {e})"
+
+
+def triage_emails(all_emails: list[dict]) -> list[dict]:
+    """
+    Agentic triage pass: Claude decides which emails need deeper context,
+    then calls fetch_email_thread for those. Returns enriched email list.
+    """
+    if not all_emails:
+        return all_emails
+
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+    # Build a compact list for Claude to reason over
+    email_summary = "\n".join(
+        f"[{i}] ({e['mailbox']}) From: {e['from']} | "
+        f"Subject: {e['subject']} | Preview: {e['snippet']} | Priority: {e['priority']}"
+        for i, e in enumerate(all_emails)
+    )
+
+    triage_prompt = f"""You are triaging emails for a busy manager's morning briefing.
+
+Here are today's emails:
+{email_summary}
+
+Your job: identify which emails (if any) need deeper context before the briefing.
+Call fetch_email_thread for emails that involve:
+- Deadlines or time-sensitive decisions
+- Contract, legal, or financial matters
+- Escalations or urgent requests
+- High-priority contacts (marked priority: high)
+- Ambiguous subjects where the snippet doesn't reveal what action is needed
+
+Be selective — flag at most 3 emails. If none need deeper context, don't call the tool."""
+
+    messages = [{"role": "user", "content": triage_prompt}]
+
+    # Agentic loop — Claude calls tools until it's done
+    while True:
+        response = client.messages.create(
+            model="claude-opus-4-7",
+            max_tokens=1024,
+            tools=TRIAGE_TOOLS,
+            messages=messages,
+        )
+
+        if response.stop_reason == "end_turn":
+            break
+
+        if response.stop_reason == "tool_use":
+            # Process all tool calls in this response
+            tool_results = []
+            for block in response.content:
+                if block.type != "tool_use":
+                    continue
+
+                idx    = block.input.get("email_index", -1)
+                reason = block.input.get("reason", "")
+
+                if idx < 0 or idx >= len(all_emails):
+                    result_text = "Invalid email index."
+                else:
+                    email = all_emails[idx]
+                    print(f"🔍  Fetching full thread for: [{email['mailbox']}] {email['subject']}")
+                    print(f"     Reason: {reason}")
+
+                    # Only Gmail supports full body fetch right now
+                    full_body = "(Full body fetch only supported for Gmail mailboxes.)"
+                    message_id = email.get("message_id")
+                    mailbox_cfg = next(
+                        (b for b in active_mailboxes() if b["label"] == email["mailbox"]),
+                        None
+                    )
+                    if message_id and mailbox_cfg and mailbox_cfg["type"] == "gmail":
+                        full_body = fetch_full_body_gmail(mailbox_cfg, message_id)
+
+                    # Enrich the email object in-place
+                    all_emails[idx]["full_body"]      = full_body
+                    all_emails[idx]["triage_reason"]  = reason
+                    all_emails[idx]["needs_attention"] = True
+                    result_text = f"Fetched full body ({len(full_body)} chars)."
+
+                tool_results.append({
+                    "type":        "tool_result",
+                    "tool_use_id": block.id,
+                    "content":     result_text,
+                })
+
+            # Feed results back so Claude can continue reasoning
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user",      "content": tool_results})
+
+        else:
+            break  # unexpected stop reason
+
+    flagged = sum(1 for e in all_emails if e.get("needs_attention"))
+    print(f"🎯  Triage complete — {flagged} email(s) flagged for deeper context")
+    return all_emails
+
+
 # ── Google Calendar ─────────────────────────────────────────────────────────────
 def fetch_todays_events(box: dict) -> list[dict]:
     creds   = get_google_creds(box["creds_file"], box["token_file"])
     service = build("calendar", "v3", credentials=creds)
-    now     = datetime.datetime.utcnow()
+    now     = datetime.datetime.now(datetime.timezone.utc)
     start   = datetime.datetime(now.year, now.month, now.day, 0, 0, 0).isoformat() + "Z"
     end     = datetime.datetime(now.year, now.month, now.day, 23, 59, 59).isoformat() + "Z"
 
@@ -286,10 +435,14 @@ def generate_briefing(all_emails: list[dict], events: list[dict]) -> str:
     for mailbox, emails in by_mailbox.items():
         email_block += f"\n[{mailbox}]\n"
         for e in emails:
-            star = "⭐ " if e["priority"] == "high" else ""
+            star      = "⭐ " if e["priority"] == "high" else ""
+            attention = "🔍 NEEDS ATTENTION — " if e.get("needs_attention") else ""
+            reason    = f"\n    Triage note: {e['triage_reason']}" if e.get("triage_reason") else ""
+            body      = f"\n    Full context: {e['full_body'][:600]}" if e.get("full_body") else ""
             email_block += (
-                f"  - {star}From: {e['from']} | "
-                f"Subject: {e['subject']} | Preview: {e['snippet']}\n"
+                f"  - {attention}{star}From: {e['from']} | "
+                f"Subject: {e['subject']} | Preview: {e['snippet']}"
+                f"{reason}{body}\n"
             )
     if not email_block.strip():
         email_block = "No new emails across all mailboxes."
@@ -406,6 +559,9 @@ def run():
     all_emails.sort(key=lambda e: 0 if e["priority"] == "high" else 1)
 
     print(f"📧  {len(all_emails)} new emails total  |  📅  {len(all_events)} events")
+
+    # ── Agentic triage pass ───────────────────────────────────────────────────
+    all_emails = triage_emails(all_emails)
 
     briefing = generate_briefing(all_emails, all_events)
 
